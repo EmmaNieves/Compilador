@@ -37,7 +37,7 @@ FUENTE_CODIGO = ('Consolas', 11) if sys.platform == 'win32' else ('Courier', 11)
 FUENTE_UI     = ('Segoe UI', 10) if sys.platform == 'win32' else ('Helvetica', 10)
 FUENTE_TITULO = ('Segoe UI', 14, 'bold') if sys.platform == 'win32' else ('Helvetica', 14, 'bold')
 
-CODIGO_EJEMPLO = """// Ejemplo de codigo para el analizador
+CODIGO_EJEMPLO = """# Ejemplo de codigo para el analizador
 inicial = 10
 velocidad = 5
 posicion = inicial + velocidad * 60
@@ -198,6 +198,7 @@ class AplicacionCompilador:
         self.editor.tag_config('str', foreground='#F38BA8')
         self.editor.tag_config('com', foreground='#6C7086')
         self.editor.tag_config('del', foreground='#CDD6F4')
+        self.editor.tag_config('err', background='#4A1A1A', foreground=C['rojo'])
 
         self._crear_botones(padre)
 
@@ -250,9 +251,8 @@ class AplicacionCompilador:
                 )
 
     # ── Resaltado de sintaxis en tiempo real ─────────────────────────────────
-
     def _resaltar_sintaxis(self, event=None):
-        for tag in ('pr', 'op', 'num', 'id', 'str', 'com', 'del'):
+        for tag in ('pr', 'op', 'num', 'id', 'str', 'com', 'del', 'err'):
             self.editor.tag_remove(tag, '1.0', 'end')
 
         codigo = self.editor.get('1.0', 'end-1c')
@@ -264,14 +264,23 @@ class AplicacionCompilador:
                 fg=C['texto_dim'])
             return
 
-        tokens, _ = self.lexer.analizar(codigo)
+        # Ahora sí recibimos los errores
+        tokens, errores = self.lexer.analizar(codigo)
 
+        # Resaltar tokens validos en el editor
         for token in tokens:
             inicio = '%d.%d' % (token.linea, token.columna - 1)
             fin    = '%d.%d' % (token.linea, token.columna - 1 + len(token.valor))
             tag = self._tag(token.categoria, token.tipo)
             self.editor.tag_add(tag, inicio, fin)
 
+        # Resaltar errores lexicos en el editor (fondo rojo)
+        for error in errores:
+            inicio = '%d.%d' % (error['linea'], error['columna'] - 1)
+            fin    = '%d.%d' % (error['linea'], error['columna'])
+            self.editor.tag_add('err', inicio, fin)
+
+        # Actualizar tabla en tiempo real
         for item in self.tabla.get_children():
             self.tabla.delete(item)
 
@@ -281,12 +290,23 @@ class AplicacionCompilador:
                 values=(i, t.valor, t.tipo, t.categoria, t.linea, t.columna),
                 tags=(tag,))
 
-        resumen = self.lexer.obtener_resumen()
-        txt = '%d tokens  |  ' % len(tokens)
-        txt += '  '.join('%s: %d' % (k, v) for k, v in list(resumen.items())[:4])
-        self.lbl_stats.config(text=txt, fg=C['azul'])
+        # Agregar errores lexicos al final de la tabla
+        for e in errores:
+            self.tabla.insert('', 'end',
+                values=('!', e['caracter'], 'ERROR_LEXICO', 'Error Lexico',
+                        e['linea'], e['columna']),
+                tags=('err',))
 
-    # ── Panel de resultados ───────────────────────────────────────────────────
+        resumen = self.lexer.obtener_resumen()
+        total   = len(tokens)
+        n_err   = len(errores)
+        txt = '%d tokens  |  %d error(es) lexico(s)  |  ' % (total, n_err)
+        txt += '  '.join('%s: %d' % (k, v) for k, v in list(resumen.items())[:3])
+        self.lbl_stats.config(
+            text=txt,
+            fg=C['rojo'] if n_err else C['azul'])
+
+ # ── Panel de resultados ───────────────────────────────────────────────────
 
     def _crear_resultados(self, padre):
         self.nb = ttk.Notebook(padre, style='App.TNotebook')
@@ -577,8 +597,45 @@ class AplicacionCompilador:
         self._limpiar_mensajes()
 
         def tarea():
-            tokens, errores = self.lexer.analizar(codigo)
-            self.root.after(0, lambda: self._mostrar_lexico(tokens, errores))
+            # Etapa 1: tokenizar
+            self.root.after(0, lambda: self._avanzar_progreso(0.25, 'Tokenizando...'))
+            tokens, errores_lex = self.lexer.analizar(codigo)
+
+            # Si hay errores lexicos, detener aqui — no tiene sentido parsear
+            if errores_lex:
+                msg = ('No se puede generar el arbol sintactico.\n'
+                    'Se encontraron %d error(es) lexico(s). '
+                    'Corrige el codigo fuente primero.' % len(errores_lex))
+                self.root.after(0, lambda: self._mostrar_error_fatal(msg, tokens, errores_lex))
+                return
+
+            # Etapa 2: parsing
+            self.root.after(0, lambda: self._avanzar_progreso(0.50, 'Parseando...'))
+            parser = AnalizadorSintactico(tokens.copy())
+            raiz   = parser.analizar()
+            errores_sint = parser.errores[:]
+
+            # Etapa 3: generando AST
+            self.root.after(0, lambda: self._avanzar_progreso(0.75, 'Generando AST...'))
+            ruta_img = None
+            try:
+                ruta_base = os.path.join(self.dir_temp, 'arbol_ast')
+                ruta_img  = self.gen_arbol.generar(raiz, ruta_base)
+            except Exception as e:
+                msg_e = str(e)
+                if 'graphviz' in msg_e.lower() or 'dot' in msg_e.lower() or 'PATH' in msg_e:
+                    errores_sint.append(
+                        'GRAPHVIZ NO ENCONTRADO. '
+                        'Reinstala graphviz desde graphviz.org/download y marca: '
+                        'Add Graphviz to the system PATH for all users. '
+                        'Luego cierra y reabre VS Code.'
+                    )
+                else:
+                    errores_sint.append('Error al generar arbol: ' + msg_e)
+
+            self.root.after(0, lambda: self._avanzar_progreso(1.0, 'Renderizando...'))
+            self.root.after(0, lambda: self._mostrar_sintactico(
+                errores_sint, ruta_img, tokens, errores_lex))
 
         threading.Thread(target=tarea, daemon=True).start()
 
@@ -630,27 +687,55 @@ class AplicacionCompilador:
         if not codigo.strip():
             self._msg('No hay codigo para analizar.', 'warn')
             return
+
+        # Verificar errores lexicos ANTES de lanzar el hilo
+        # El lexer ya analizó el codigo en _resaltar_sintaxis,
+        # los errores están en self.lexer.errores
+        if self.lexer.errores:
+            n = len(self.lexer.errores)
+            self.canvas.delete('all')
+            self.canvas.create_text(
+                400, 260,
+                text='✗ No se puede generar el arbol AST',
+                font=(FUENTE_UI[0], 14, 'bold'),
+                fill=C['rojo'], justify='center')
+            self.canvas.create_text(
+                400, 310,
+                text='Se encontraron %d error(es) lexico(s).\nCorrige el codigo fuente primero.' % n,
+                font=(FUENTE_UI[0], 10),
+                fill=C['naranja'], justify='center', width=500)
+
+            for item in self.tabla_errores_sint.get_children():
+                self.tabla_errores_sint.delete(item)
+            self.tabla_errores_sint.insert('', 'end',
+                values=('✗', 'Analisis bloqueado — corrige los errores lexicos primero'),
+                tags=('err',))
+
+            self._msg(
+                'Analisis sintactico bloqueado.\n'
+                'Hay %d error(es) lexico(s) sin corregir.' % n, 'err')
+            self._set_estado('Error lexico', C['rojo'])
+            self.nb.select(1)
+            return   # <-- sale aqui, no lanza el hilo
+
         self._set_estado('Generando arbol...', C['naranja'])
         self.btn_sin.config(state='disabled')
         self._iniciar_progreso()
 
         def tarea():
-            # 25% — tokenizacion
             self.root.after(0, lambda: self._avanzar_progreso(0.25, 'Tokenizando...'))
             tokens, errores_lex = self.lexer.analizar(codigo)
 
-            # 50% — parsing
             self.root.after(0, lambda: self._avanzar_progreso(0.50, 'Parseando...'))
             parser = AnalizadorSintactico(tokens.copy())
-            raiz = parser.analizar()
+            raiz   = parser.analizar()
             errores_sint = parser.errores[:]
 
-            # 75% — generando AST
             self.root.after(0, lambda: self._avanzar_progreso(0.75, 'Generando AST...'))
             ruta_img = None
             try:
                 ruta_base = os.path.join(self.dir_temp, 'arbol_ast')
-                ruta_img = self.gen_arbol.generar(raiz, ruta_base)
+                ruta_img  = self.gen_arbol.generar(raiz, ruta_base)
             except Exception as e:
                 msg_e = str(e)
                 if 'graphviz' in msg_e.lower() or 'dot' in msg_e.lower() or 'PATH' in msg_e:
@@ -663,7 +748,6 @@ class AplicacionCompilador:
                 else:
                     errores_sint.append('Error al generar arbol: ' + msg_e)
 
-            # 100% — render
             self.root.after(0, lambda: self._avanzar_progreso(1.0, 'Renderizando...'))
             self.root.after(0, lambda: self._mostrar_sintactico(
                 errores_sint, ruta_img, tokens, errores_lex))
@@ -686,18 +770,56 @@ class AplicacionCompilador:
             self.zoom_nivel = 1.0
             self._render_arbol()
 
-        if errores_sint:
-            for i, e in enumerate(errores_sint, 1):
+            # Poblar tabla de errores
+            if errores_sint:
+                for i, e in enumerate(errores_sint, 1):
+                    self.tabla_errores_sint.insert('', 'end',
+                        values=(i, e), tags=('err',))
+                # Advertir que el arbol es parcial e invalido
                 self.tabla_errores_sint.insert('', 'end',
-                    values=(i, e), tags=('err',))
-            self._msg('%d error(es) sintactico(s) encontrado(s).' % len(errores_sint), 'err')
-        else:
-            self.tabla_errores_sint.insert('', 'end',
-                values=('✓', 'Sin errores sintacticos'), tags=('ok',))
-            self._msg('Arbol sintactico generado exitosamente.', 'ok')
+                    values=('⚠', 'El arbol generado es PARCIAL — no representa el programa correctamente'),
+                    tags=('err',))
+                self._msg(
+                    'Se encontraron %d error(es) sintactico(s).\n'
+                    'El arbol mostrado es parcial e invalido. Corrige los errores.' % len(errores_sint),
+                    'err')
+            else:
+                self.tabla_errores_sint.insert('', 'end',
+                    values=('✓', 'Sin errores sintacticos'), tags=('ok',))
+                self._msg('Arbol sintactico generado exitosamente.', 'ok')
 
         self.nb.select(1)
         self._set_estado('Listo', C['verde'])
+        self.btn_sin.config(state='normal')
+        self._finalizar_progreso()
+
+    def _mostrar_error_fatal(self, mensaje, tokens, errores_lex):
+        """Muestra error cuando el proceso no puede continuar."""
+        self._mostrar_lexico(tokens, errores_lex)
+
+        self.canvas.delete('all')
+        self.canvas.create_text(
+            400, 260,
+            text='✗ No se puede generar el arbol AST' \
+            '   Arrele los errores, por favor   ',
+            font=(FUENTE_UI[0], 14, 'bold'),
+            fill=C['rojo'], justify='center')
+        self.canvas.create_text(
+            400, 310,
+            text=mensaje,
+            font=(FUENTE_UI[0], 10),
+            fill=C['naranja'], justify='center', width=500)
+
+        # Limpiar tabla de errores sintacticos y mostrar el bloqueo
+        for item in self.tabla_errores_sint.get_children():
+            self.tabla_errores_sint.delete(item)
+        self.tabla_errores_sint.insert('', 'end',
+            values=('✗', 'Analisis bloqueado — corrige los errores lexicos primero'),
+            tags=('err',))
+
+        self._msg(mensaje, 'err')
+        self.nb.select(1)
+        self._set_estado('Error lexico', C['rojo'])
         self.btn_sin.config(state='normal')
         self._finalizar_progreso()
 
