@@ -186,6 +186,78 @@ class ExportadorPDF:
         doc.build(elems)
         return ruta_salida
 
+    def exportar_semantico(self, filas_tabla, errores_sem, codigo, ruta_salida):
+        """
+        Exporta el analisis semantico a PDF.
+        Incluye la tabla de simbolos y la lista de errores semanticos.
+
+        Parametros:
+            filas_tabla  : list[dict] — salida de TabladeSimbolos.exportar_tabla()
+            errores_sem  : list[ErrorSemantico]
+            codigo       : codigo fuente analizado
+            ruta_salida  : ruta del PDF a crear
+        """
+        doc = SimpleDocTemplate(
+            ruta_salida, pagesize=A4,
+            rightMargin=2*cm, leftMargin=2*cm,
+            topMargin=2*cm, bottomMargin=2*cm
+        )
+        elems = self._encabezado('Analisis Semantico - Tabla de Simbolos', codigo)
+
+        # ── Tabla de simbolos ─────────────────────────────────────────────────
+        elems.append(Paragraph(
+            'Simbolos encontrados: <b>%d</b>   Errores semanticos: <b>%d</b>'
+            % (len(filas_tabla), len(errores_sem)),
+            self.s_normal
+        ))
+        elems.append(Spacer(1, 0.3 * cm))
+
+        if filas_tabla:
+            datos_sim = [['Nombre', 'Tipo', 'Categoria', 'Alcance', 'Linea']]
+            for f in filas_tabla:
+                datos_sim.append([f['nombre'], f['tipo'],
+                                   f['categoria'], f['alcance'], f['linea']])
+            tabla_sim = Table(datos_sim,
+                              colWidths=[4.5*cm, 2.5*cm, 2.5*cm, 3.0*cm, 1.5*cm])
+            tabla_sim.setStyle(self._estilo_tabla(len(datos_sim)))
+            elems.append(tabla_sim)
+        else:
+            elems.append(Paragraph('No se encontraron simbolos.', self.s_normal))
+
+        # ── Errores semanticos ────────────────────────────────────────────────
+        if errores_sem:
+            elems.append(Spacer(1, 0.5 * cm))
+            elems.append(Paragraph('Errores Semanticos Detectados', self.s_subtitulo))
+            datos_err = [['Categoria', 'Variable', 'Descripcion']]
+            for e in errores_sem:
+                datos_err.append([
+                    e.categoria,
+                    e.variable if e.variable else '—',
+                    e.mensaje
+                ])
+            tabla_err = Table(datos_err, colWidths=[3.5*cm, 2.5*cm, 10.0*cm])
+            tabla_err.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0),  colors.HexColor('#C0392B')),
+                ('TEXTCOLOR',  (0, 0), (-1, 0),  colors.white),
+                ('FONTNAME',   (0, 0), (-1, 0),  'Helvetica-Bold'),
+                ('FONTSIZE',   (0, 0), (-1, -1), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), self.COLOR_ERROR_BG),
+                ('GRID',       (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+                ('TOPPADDING',    (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 5),
+                ('WORDWRAP',   (2, 1), (2, -1), 1),
+            ]))
+            elems.append(tabla_err)
+        else:
+            elems.append(Spacer(1, 0.3 * cm))
+            elems.append(Paragraph(
+                '<b>Sin errores semanticos.</b> El programa es semanticamente correcto.',
+                self.s_normal))
+
+        doc.build(elems)
+        return ruta_salida
+
     def exportar_completo(self, tokens, errores_lex, codigo,
                           ruta_img, errores_sint, ruta_salida):
         """

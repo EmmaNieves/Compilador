@@ -1,6 +1,4 @@
 """
-errores sintacticos
-comentarios
 main.py - Punto de entrada de la aplicacion
 Ejecutar: python main.py
 """
@@ -31,7 +29,6 @@ def verificar_dependencias():
         sys.exit(1)
 
     # Advertencia si graphviz no esta en el PATH del sistema
-    # (el modulo parser_ast lo buscara automaticamente)
     import shutil
     if not shutil.which('dot'):
         print('')
@@ -48,7 +45,7 @@ def verificar_dependencias():
 
 def main():
     print('=' * 60)
-    print('  Analizador Lexico y Sintactico')
+    print('  Analizador Lexico, Sintactico y Semantico')
     print('  Compiladores - Python + Tkinter')
     print('=' * 60)
 

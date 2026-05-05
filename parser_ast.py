@@ -70,10 +70,11 @@ class NodoAST:
         id_unico : ID unico para graphviz (evita confundir nodos con igual texto)
     """
 
-    def __init__(self, etiqueta):
+    def __init__(self, etiqueta, linea=None):
         self.etiqueta = str(etiqueta)
         self.hijos    = []
         self.id_unico = uuid.uuid4().hex[:12]
+        self.linea    = linea
 
     def agregar_hijo(self, nodo):
         """Agrega un nodo hijo si no es None."""
@@ -252,8 +253,8 @@ class AnalizadorSintactico:
         id_token = self.avanzar()   # identificador
         op_token = self.avanzar()   # operador (=, +=, //=, etc.)
 
-        nodo = NodoAST(op_token.valor)
-        nodo.agregar_hijo(NodoAST(id_token.valor))
+        nodo = NodoAST(op_token.valor, linea=id_token.linea)
+        nodo.agregar_hijo(NodoAST(id_token.valor, linea=id_token.linea))
         nodo.agregar_hijo(self.parsear_expresion())
         self.consumir_si('PUNTO_COMA')
         return nodo
@@ -337,10 +338,11 @@ class AnalizadorSintactico:
 
     def parsear_funcion(self):
         """Parsea: def nombre(params): bloque"""
-        self.avanzar()   # Consume 'def'
-        nodo = NodoAST('def')
+        tok_def = self.avanzar()   # Consume 'def'
+        nodo = NodoAST('def', linea=tok_def.linea)
         if self.es_tipo('IDENTIFICADOR'):
-            nodo.agregar_hijo(NodoAST(self.avanzar().valor))
+            tok_id = self.avanzar()
+            nodo.agregar_hijo(NodoAST(tok_id.valor, linea=tok_id.linea))
         self.consumir_si('PAREN_ABRE')
         nodo_params = NodoAST('params')
         while not self.es_tipo('PAREN_CIERRA') and self.token_actual():
@@ -369,7 +371,7 @@ class AnalizadorSintactico:
                     nodo.agregar_hijo(hijo)
                 elif self.token_actual():
                     self.pos += 1
-            self.consumir_si('LLAVE_CIERRA')
+            self.coincidir('LLAVE_CIERRA')   # obligatorio — registra error si falta
         elif self.es_tipo('DOS_PUNTOS'):
             self.avanzar()
             hijo = self.parsear_sentencia()
